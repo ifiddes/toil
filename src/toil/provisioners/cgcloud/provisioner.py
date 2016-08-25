@@ -139,6 +139,18 @@ class CGCloudProvisioner(AbstractProvisioner):
             log.info('Cluster already at desired size of %i. Nothing to do.', numNodes)
         return numNodes
 
+    @staticmethod
+    def launchCluster(instanceType, keyName, securityGroupName, spotBid=None):
+        raise NotImplementedError
+
+    @staticmethod
+    def sshCluster(securityGroupName):
+        raise NotImplementedError
+
+    @staticmethod
+    def destroyCluster(securityGroupName):
+        raise NotImplementedError
+
     def _addNodes(self, instances, numNodes, preemptable=False):
         deadline = time.time() + provisioning_timeout
         spec = dict(key_name=self._keyName,
@@ -228,7 +240,8 @@ class CGCloudProvisioner(AbstractProvisioner):
             log.warn('Batch system is not scalable. Assuming all instances joined the cluster.')
         return numInstancesAdded
 
-    def _partialBillingInterval(self, instance):
+    @staticmethod
+    def _partialBillingInterval(instance):
         """
         Returns a floating point value between 0 and 1.0 representing how far we are into the
         current billing cycle for the given instance. If the return value is .25, we are one
@@ -275,8 +288,9 @@ class CGCloudProvisioner(AbstractProvisioner):
             self._logAndTerminate(instanceIds)
         return len(instanceIds)
 
-    def _remainingBillingInterval(self, instance):
-        return 1.0 - self._partialBillingInterval(instance)
+    @staticmethod
+    def _remainingBillingInterval(instance):
+        return 1.0 - CGCloudProvisioner._partialBillingInterval(instance)
 
     def _logAndTerminate(self, instanceIds):
         log.debug('IDs of terminated instances: %r', instanceIds)

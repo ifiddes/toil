@@ -12,7 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-AWSUserData="""#cloud-config
+coreOSAMI = 'ami-14589274'
+
+ec2_full_policy = dict( Version="2012-10-17", Statement=[
+    dict( Effect="Allow", Resource="*", Action="ec2:*" ) ] )
+
+s3_full_policy = dict( Version="2012-10-17", Statement=[
+    dict( Effect="Allow", Resource="*", Action="s3:*" ) ] )
+
+sdb_full_policy = dict( Version="2012-10-17", Statement=[
+    dict( Effect="Allow", Resource="*", Action="sdb:*" ) ] )
+
+iam_full_policy = dict( Version="2012-10-17", Statement=[
+    dict( Effect="Allow", Resource="*", Action="iam:*" ) ] )
+
+
+leaderTag = '3.3.0--512d560dbef36e2ce6d9e89e1faa921829579a75'
+leaderArgs = '--registry=in_memory'
+workerTag = '3.3.0--512d560dbef36e2ce6d9e89e1faa921829579a75'
+workerArgs = '--work_dir=/var/lib/mesos --master={}:5050 --attributes=preemptable:False'
+
+AWSUserData = """#cloud-config
 
 write_files:
     - path: "/home/core/volumes.sh"

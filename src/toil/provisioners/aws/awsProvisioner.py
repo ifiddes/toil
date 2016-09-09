@@ -15,7 +15,7 @@ import subprocess
 import time
 import logging
 from boto.ec2.blockdevicemapping import BlockDeviceMapping, BlockDeviceType
-from boto.exception import BotoServerError, EC2ResponseError
+from boto.exception import BotoServerError
 from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2
 from itertools import islice
 
@@ -44,7 +44,7 @@ class AWSProvisioner(AbstractProvisioner):
         self.ctx = Context(availability_zone='us-west-2a', namespace='/')
         self.instanceMetaData = get_instance_metadata()
         self.securityGroupName = self.instanceMetaData['security-groups']
-        self.spotBid=None
+        self.spotBid = None
         parsedBid = config.nodeType.split(':', 1)
         if len(config.nodeType) != len(parsedBid[0]):
             # there is a bid
@@ -91,7 +91,7 @@ class AWSProvisioner(AbstractProvisioner):
     @staticmethod
     def launchCluster(instanceType, keyName, securityGroupName, spotBid=None):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
-        profileARN = AWSProvisioner.getProfileARN(ctx, instanceID='leader', role='leader')
+        profileARN = AWSProvisioner._getProfileARN(ctx, instanceID='leader', role='leader')
         AWSProvisioner._createSecurityGroup(ctx, securityGroupName)
         leaderData = {'role': 'leader', 'tag': leaderTag, 'args': leaderArgs}
         userData = AWSUserData.format(**leaderData)
@@ -107,12 +107,12 @@ class AWSProvisioner(AbstractProvisioner):
             for attempt in retry_ec2(retry_while=expectedLaunchErrors):
                 with attempt:
                     requests = ctx.ec2.request_spot_instances(price=spotBid, image_id=coreOSAMI,
-                                                               count=1, key_name=keyName,
-                                                               security_groups=[securityGroupName],
-                                                               instance_type=instanceType,
-                                                               instance_profile_arn=profileARN,
-                                                               user_data=userData,
-                                                               launch_group=securityGroupName)
+                                                              count=1, key_name=keyName,
+                                                              security_groups=[securityGroupName],
+                                                              instance_type=instanceType,
+                                                              instance_profile_arn=profileARN,
+                                                              user_data=userData,
+                                                              launch_group=securityGroupName)
             assert requests
             AWSProvisioner._waitOnRequests(ctx, requests)
 
@@ -155,8 +155,8 @@ class AWSProvisioner(AbstractProvisioner):
 
     def _addNodes(self, instancesToLaunch, preemptable=None):
         bdm = self._getBlockDeviceMapping()
-        id = str(time.time())
-        arn = self.getProfileARN(self.ctx, instanceID=id, role='worker')
+        profileID = str(time.time())
+        arn = self._getProfileARN(self.ctx, instanceID=profileID, role='worker')
         workerData = {'role': 'worker', 'tag': workerTag, 'args': workerArgs.format(self.masterIP)}
         userData = AWSUserData.format(**workerData)
         if not preemptable:
@@ -172,10 +172,9 @@ class AWSProvisioner(AbstractProvisioner):
         else:
             logger.debug('Launching spot instance(s) with bid of %s', self.spotBid)
             requests = []
-            ids = []
             for attempt in retry_ec2(retry_while=expectedLaunchErrors):
                 with attempt:
-                    #returns list of SpotInstanceRequests
+                    # returns list of SpotInstanceRequests
                     requests = self.ctx.ec2.request_spot_instances(price=self.spotBid, image_id=coreOSAMI,
                                                                    count=instancesToLaunch, key_name=self.keyName,
                                                                    security_groups=[self.securityGroupName],
@@ -240,8 +239,7 @@ class AWSProvisioner(AbstractProvisioner):
         else:
             # Without load info all we can do is sort instances by time left in billing cycle.
             instances = sorted(instances,
-                               key=lambda instance: (
-                               CGCloudProvisioner._remainingBillingInterval(instance)))
+                               key=lambda instance: (CGCloudProvisioner._remainingBillingInterval(instance)))
             instancesTerminate = [instance for instance in islice(instances, numNodes)]
         if instancesTerminate:
             self._deleteIAMProfiles(instances=instancesTerminate, ctx=self.ctx)
@@ -252,8 +250,10 @@ class AWSProvisioner(AbstractProvisioner):
 
     @staticmethod
     def __getNodesInCluster(ctx, securityGroupName, preemptable=False, both=False):
-        pendingInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName, 'instance-state-name': 'pending'})
-        runningInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName, 'instance-state-name': 'running'})
+        pendingInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName,
+                                                               'instance-state-name': 'pending'})
+        runningInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName,
+                                                               'instance-state-name': 'running'})
         instances = set(pendingInstances)
         if not preemptable and not both:
             return [x for x in instances.union(set(runningInstances)) if x.spot_instance_request_id is None]
@@ -271,9 +271,8 @@ class AWSProvisioner(AbstractProvisioner):
     def _getWorkersInCluster(self, preemptable):
         entireCluster = self._getNodesInCluster(both=True)
         logger.debug('All nodes in cluster %s', entireCluster)
-        workerInstances = [i for i in entireCluster
-                           if i.private_ip_address != self.masterIP  # exclude leader
-                           and preemptable != (i.spot_instance_request_id is None)]
+        workerInstances = [i for i in entireCluster if i.private_ip_address != self.masterIP and
+                           preemptable != (i.spot_instance_request_id is None)]
         logger.debug('Workers found in cluster after filtering %s', workerInstances)
         return workerInstances
 
@@ -293,23 +292,18 @@ class AWSProvisioner(AbstractProvisioner):
         return name
 
     @staticmethod
-    def getProfileARN(ctx, instanceID, role):
-        roleName='toil-appliance-'+role
-        awsInstanceProfileName = roleName+'-'+instanceID
-        policy = {}
-        policy.update( dict(
-            iam_full=iam_full_policy,
-            ec2_full=ec2_full_policy,
-            s3_full=s3_full_policy,
-            sbd_full=sdb_full_policy))
-
-        profileName = ctx.setup_iam_ec2_role(role_name=roleName, policies=policy)
+    def _getProfileARN(ctx, instanceID, role):
+        roleName = 'toil-appliance-' + role
+        awsInstanceProfileName = roleName
+        policy = dict(iam_full=iam_full_policy, ec2_full=ec2_full_policy,
+                      s3_full=s3_full_policy, sbd_full=sdb_full_policy)
+        ctx.setup_iam_ec2_role(role_name=roleName, policies=policy)
 
         try:
             profile = ctx.iam.get_instance_profile(awsInstanceProfileName)
         except BotoServerError as e:
             if e.status == 404:
-                profile = ctx.iam.create_instance_profile( awsInstanceProfileName )
+                profile = ctx.iam.create_instance_profile(awsInstanceProfileName)
                 profile = profile.create_instance_profile_response.create_instance_profile_result
             else:
                 raise
@@ -318,14 +312,14 @@ class AWSProvisioner(AbstractProvisioner):
         profile = profile.instance_profile
         profile_arn = profile.arn
 
-        if len( profile.roles ) > 1:
-                raise RuntimeError( 'Did not expect profile to contain more than one role' )
-        elif len( profile.roles ) == 1:
+        if len(profile.roles) > 1:
+                raise RuntimeError('Did not expect profile to contain more than one role')
+        elif len(profile.roles) == 1:
             # this should be profile.roles[0].role_name
             if profile.roles.member.role_name == roleName:
                 return profile_arn
             else:
-                ctx.iam.remove_role_from_instance_profile( awsInstanceProfileName,
-                                                                profile.roles.member.role_name )
-        ctx.iam.add_role_to_instance_profile( awsInstanceProfileName, roleName )
+                ctx.iam.remove_role_from_instance_profile(awsInstanceProfileName,
+                                                          profile.roles.member.role_name)
+        ctx.iam.add_role_to_instance_profile(awsInstanceProfileName, roleName)
         return profile_arn

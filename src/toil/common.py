@@ -511,8 +511,10 @@ class Toil(object):
             jobStore.resume()
             # Merge configuration from job store with command line options
             config = jobStore.config
+            logger.warn('config:: %s', config)
             config.setOptions(self.options)
             config.workflowAttemptNumber += 1
+            logger.warn('config22:: %s', config)
             jobStore.writeConfig()
         self.config = config
         self._jobStore = jobStore

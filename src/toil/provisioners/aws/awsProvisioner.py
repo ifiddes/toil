@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import subprocess
-import time
 import logging
 from boto.ec2.blockdevicemapping import BlockDeviceMapping, BlockDeviceType
 from boto.exception import BotoServerError
@@ -26,6 +25,7 @@ from toil.provisioners.aws import *
 from cgcloud.lib.context import Context
 from boto.utils import get_instance_metadata
 
+from toil.provisioners import BaseAWSProvisioner
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def expectedShutdownErrors(e):
     return e.status == 400 and 'dependent object' in e.body
 
 
-class AWSProvisioner(AbstractProvisioner):
+class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
 
     def __init__(self, config, batchSystem):
         self.ctx = Context(availability_zone='us-west-2a', namespace='/')
@@ -216,13 +216,13 @@ class AWSProvisioner(AbstractProvisioner):
             # Sort nodes by number of workers and time left in billing cycle
             nodes.sort(key=lambda (instance, nodeInfo): (
                 nodeInfo.workers if nodeInfo else 1,
-                CGCloudProvisioner._remainingBillingInterval(instance)))
+                self._remainingBillingInterval(instance)))
             nodes = nodes[numNodes:]
             instancesTerminate = [instance for instance, nodeInfo in nodes]
         else:
             # Without load info all we can do is sort instances by time left in billing cycle.
             instances = sorted(instances,
-                               key=lambda instance: (CGCloudProvisioner._remainingBillingInterval(instance)))
+                               key=lambda instance: (self._remainingBillingInterval(instance)))
             instancesTerminate = [instance for instance in islice(instances, numNodes)]
         if instancesTerminate:
             self._deleteIAMProfiles(instances=instancesTerminate, ctx=self.ctx)

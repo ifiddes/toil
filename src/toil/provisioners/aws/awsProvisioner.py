@@ -91,7 +91,7 @@ class AWSProvisioner(AbstractProvisioner):
     @classmethod
     def launchCluster(cls, instanceType, keyName, securityGroupName, spotBid=None):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
-        profileARN = cls._getProfileARN(ctx, instanceID='leader', role='leader')
+        profileARN = cls._getProfileARN(ctx, role='leader')
         cls._createSecurityGroup(ctx, securityGroupName)
         leaderData = {'role': 'leader', 'tag': leaderTag, 'args': leaderArgs}
         userData = AWSUserData.format(**leaderData)
@@ -155,8 +155,7 @@ class AWSProvisioner(AbstractProvisioner):
 
     def _addNodes(self, instancesToLaunch, preemptable=None):
         bdm = self._getBlockDeviceMapping()
-        profileID = str(time.time())
-        arn = self._getProfileARN(self.ctx, instanceID=profileID, role='worker')
+        arn = self._getProfileARN(self.ctx, role='worker')
         workerData = {'role': 'worker', 'tag': workerTag, 'args': workerArgs.format(self.masterIP)}
         userData = AWSUserData.format(**workerData)
         if not preemptable:
@@ -276,7 +275,7 @@ class AWSProvisioner(AbstractProvisioner):
         return name
 
     @classmethod
-    def _getProfileARN(cls, ctx, instanceID, role):
+    def _getProfileARN(cls, ctx, role):
         roleName = 'toil-appliance-' + role
         awsInstanceProfileName = roleName
         policy = dict(iam_full=iam_full_policy, ec2_full=ec2_full_policy,

@@ -16,7 +16,7 @@ import time
 import logging
 from boto.ec2.blockdevicemapping import BlockDeviceMapping, BlockDeviceType
 from boto.exception import BotoServerError
-from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2
+from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2, wait_spot_requests_active
 from itertools import islice
 
 from toil.batchSystems.abstractBatchSystem import AbstractScalableBatchSystem
@@ -77,10 +77,10 @@ class AWSProvisioner(AbstractProvisioner):
                      cores=instanceType.cores,
                      disk=(instanceType.disks * instanceType.disk_capacity * 2 ** 30))
 
-    @staticmethod
-    def sshCluster(securityGroupName):
+    @classmethod
+    def sshCluster(cls, securityGroupName):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
-        instances = AWSProvisioner.__getNodesInCluster(ctx, securityGroupName, both=True)
+        instances = cls.__getNodesInCluster(ctx, securityGroupName, both=True)
         key = lambda x: x.launch_time
         instances.sort(key=key)
         master = instances[0]  # assume master was launched first
@@ -88,11 +88,11 @@ class AWSProvisioner(AbstractProvisioner):
         command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"docker exec -it leader bash\"" % masterIP
         subprocess.check_call(command, shell=True)
 
-    @staticmethod
-    def launchCluster(instanceType, keyName, securityGroupName, spotBid=None):
+    @classmethod
+    def launchCluster(cls, instanceType, keyName, securityGroupName, spotBid=None):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
-        profileARN = AWSProvisioner._getProfileARN(ctx, instanceID='leader', role='leader')
-        AWSProvisioner._createSecurityGroup(ctx, securityGroupName)
+        profileARN = cls._getProfileARN(ctx, instanceID='leader', role='leader')
+        cls._createSecurityGroup(ctx, securityGroupName)
         leaderData = {'role': 'leader', 'tag': leaderTag, 'args': leaderArgs}
         userData = AWSUserData.format(**leaderData)
         if not spotBid:
@@ -114,33 +114,33 @@ class AWSProvisioner(AbstractProvisioner):
                                                               user_data=userData,
                                                               launch_group=securityGroupName)
             assert requests
-            AWSProvisioner._waitOnRequests(ctx, requests)
+            wait_spot_requests_active(ctx.ec2, requests)
 
-    @staticmethod
-    def destroyCluster(securityGroupName):
+    @classmethod
+    def destroyCluster(cls, securityGroupName):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
-        instances = AWSProvisioner.__getNodesInCluster(ctx, securityGroupName, both=True)
-        spotIDs = AWSProvisioner._getSpotRequestIDs(ctx, securityGroupName)
+        instances = cls.__getNodesInCluster(ctx, securityGroupName, both=True)
+        spotIDs = cls._getSpotRequestIDs(ctx, securityGroupName)
         if spotIDs:
             ctx.ec2.cancel_spot_instance_requests(request_ids=spotIDs)
         if instances:
-            AWSProvisioner._deleteIAMProfiles(instances=instances, ctx=ctx)
-            AWSProvisioner._terminateInstance(instances=instances, ctx=ctx)
+            cls._deleteIAMProfiles(instances=instances, ctx=ctx)
+            cls._terminateInstance(instances=instances, ctx=ctx)
         logger.info('Deleting security group...')
         for attempt in retry_ec2(retry_after=30, retry_for=300, retry_while=expectedShutdownErrors):
             with attempt:
                 ctx.ec2.delete_security_group(name=securityGroupName)
         logger.info('... Succesfully deleted security group')
 
-    @staticmethod
-    def _terminateInstance(instances, ctx):
+    @classmethod
+    def _terminateInstance(cls, instances, ctx):
         instanceIDs = [x.id for x in instances]
         logger.info('Terminating instance(s): %s', instanceIDs)
         ctx.ec2.terminate_instances(instance_ids=instanceIDs)
         logger.info('Instance(s) terminated.')
 
-    @staticmethod
-    def _deleteIAMProfiles(instances, ctx):
+    @classmethod
+    def _deleteIAMProfiles(cls, instances, ctx):
         instanceProfiles = [x.instance_profile for x in instances]
         for profile in instanceProfiles:
             profile_name = profile['arn'].split('/', 1)[1]
@@ -181,7 +181,7 @@ class AWSProvisioner(AbstractProvisioner):
                                                                    instance_type=self.instanceType.name,
                                                                    instance_profile_arn=arn, user_data=userData,
                                                                    block_device_map=bdm)
-            self._waitOnRequests(self.ctx, requests)
+            wait_spot_requests_active(ec2=self.ctx.ec2, requests=requests)
 
         logger.info('Launched %s new instance(s)', instancesToLaunch)
 
@@ -196,22 +196,6 @@ class AWSProvisioner(AbstractProvisioner):
 
         logger.debug('Device mapping: %s', bdm)
         return bdm
-
-    @staticmethod
-    def _waitOnRequests(ctx, requests):
-        fulfilled = False
-        ids = [x.id for x in requests]
-        while not fulfilled:
-            # wait here until the spot requests are filled and the instances are at least pending
-            # this simplifies the rest of the code by limiting the spot related code to this branch
-            requests = ctx.ec2.get_all_spot_instance_requests(request_ids=ids)
-            ids = [x.id for x in requests if x.status.code != 'fulfilled']
-            if len(ids) == 0:
-                fulfilled = True
-            else:
-                logger.info(
-                    'Spot requests with ids: %s are not yet fulfilled. Checking again in 15 sec..', ids)
-                time.sleep(15)
 
     def _removeNodes(self, instances, numNodes, preemptable=False, force=False):
         # most of this code is taken directly from toil.provisioners.cgcloud.provisioner.CGCloudProvisioner._removeNodes()
@@ -248,8 +232,8 @@ class AWSProvisioner(AbstractProvisioner):
             logger.debug('No nodes to delete')
         return len(instancesTerminate)
 
-    @staticmethod
-    def __getNodesInCluster(ctx, securityGroupName, preemptable=False, both=False):
+    @classmethod
+    def __getNodesInCluster(cls, ctx, securityGroupName, preemptable=False, both=False):
         pendingInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName,
                                                                'instance-state-name': 'pending'})
         runningInstances = ctx.ec2.get_only_instances(filters={'instance.group-name': securityGroupName,
@@ -276,13 +260,13 @@ class AWSProvisioner(AbstractProvisioner):
         logger.debug('Workers found in cluster after filtering %s', workerInstances)
         return workerInstances
 
-    @staticmethod
-    def _getSpotRequestIDs(ctx, securityGroupName):
+    @classmethod
+    def _getSpotRequestIDs(cls, ctx, securityGroupName):
         requests = ctx.ec2.get_all_spot_instance_requests()
         return [x.id for x in requests if x.launch_group == securityGroupName]
 
-    @staticmethod
-    def _createSecurityGroup(ctx, name):
+    @classmethod
+    def _createSecurityGroup(cls, ctx, name):
         # security group create/get. ssh + all ports open within the group
         web = ctx.ec2.create_security_group(name, 'Toil appliance security group')
         # open port 22 for ssh-ing
@@ -291,8 +275,8 @@ class AWSProvisioner(AbstractProvisioner):
         web.authorize(ip_protocol='tcp', from_port=0, to_port=9000, src_group=web)
         return name
 
-    @staticmethod
-    def _getProfileARN(ctx, instanceID, role):
+    @classmethod
+    def _getProfileARN(cls, ctx, instanceID, role):
         roleName = 'toil-appliance-' + role
         awsInstanceProfileName = roleName
         policy = dict(iam_full=iam_full_policy, ec2_full=ec2_full_policy,

@@ -139,16 +139,16 @@ class CGCloudProvisioner(AbstractProvisioner):
             log.info('Cluster already at desired size of %i. Nothing to do.', numNodes)
         return numNodes
 
-    @staticmethod
-    def launchCluster(instanceType, keyName, securityGroupName, spotBid=None):
+    @classmethod
+    def launchCluster(cls, instanceType, keyName, securityGroupName, spotBid=None):
         raise NotImplementedError
 
-    @staticmethod
-    def sshCluster(securityGroupName):
+    @classmethod
+    def sshCluster(cls, securityGroupName):
         raise NotImplementedError
 
-    @staticmethod
-    def destroyCluster(securityGroupName):
+    @classmethod
+    def destroyCluster(cls, securityGroupName):
         raise NotImplementedError
 
     def _addNodes(self, instances, numNodes, preemptable=False):

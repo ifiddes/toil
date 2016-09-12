@@ -76,17 +76,17 @@ class AbstractProvisioner(object):
         """
         raise NotImplementedError
 
-    @staticmethod
+    @classmethod
     @abstractmethod
-    def launchCluster(instanceType, keyName, securityGroupName, spotBid=None):
+    def launchCluster(cls, instanceType, keyName, securityGroupName, spotBid=None):
         raise NotImplementedError
 
-    @staticmethod
+    @classmethod
     @abstractmethod
-    def sshCluster(securityGroupName):
+    def sshCluster(cls, securityGroupName):
         raise NotImplementedError
 
-    @staticmethod
+    @classmethod
     @abstractmethod
-    def destroyCluster(securityGroupName):
+    def destroyCluster(cls, securityGroupName):
         raise NotImplementedError

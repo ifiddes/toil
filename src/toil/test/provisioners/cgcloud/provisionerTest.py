@@ -23,10 +23,71 @@ from uuid import uuid4
 from bd2k.util.iterables import concat
 from cgcloud.lib.test import CgcloudTestCase
 
-from toil.test import integrative, ToilTest
+from toil.test import integrative, ToilTest, needs_aws
 from toil.version import version as toil_version, cgcloudVersion
 
 log = logging.getLogger(__name__)
+
+
+@needs_aws
+@integrative
+class AWSProvisionerTest(ToilTest):
+
+    def __init__(self, methodName='AWSprovisioner'):
+        super(AWSProvisionerTest, self).__init__(methodName=methodName)
+        self.instanceType = 'm3.large'
+        self.keyName = 'cketchum@ucsc.edu'
+        self.clusterName = 'aws-provisioner-test-' + str(uuid4())
+        self.toilScripts = '2.1.0a1.dev455'
+
+    def tearDown(self):
+        from toil.provisioners.aws.awsProvisioner import AWSProvisioner
+        AWSProvisioner.destroyCluster(self.clusterName)
+
+    def _test(self, spotInstances=False):
+        from toil.provisioners.aws.awsProvisioner import AWSProvisioner
+        AWSProvisioner.launchCluster(instanceType=self.instanceType, keyName=self.keyName,
+                                     securityGroupName=self.clusterName)
+
+        master = AWSProvisioner._getMaster(securityGroupName=self.clusterName, wait=True)
+
+        # install toil scripts
+        install_command = ('pip install toil-scripts=%s' % self.toilScripts)
+        AWSProvisioner._ssh(master.ip_address, command=install_command)
+        toilOptions = ['--batchSystem=mesos',
+                       '--mesosMaster=mesos-master:5050',
+                       '--clean=always',
+                       '--retryCount=2']
+
+        toilOptions.extend(['--provisioner=cgcloud',
+                            '--nodeType=' + self.instanceType,
+                            '--maxNodes=%s' % self.numWorkers,
+                            '--logDebug'])
+        if spotInstances:
+            toilOptions.extend([
+                '--preemptableNodeType=%s:%s' % (self.instanceType, self.spotBid),
+                # The RNASeq pipeline does not specify a preemptability requirement so we
+                # need to specify a default, otherwise jobs would never get scheduled.
+                '--defaultPreemptable',
+                '--maxPreemptableNodes=%s' % self.numWorkers])
+
+        toilOptions = ' '.join(toilOptions)
+
+        runCommand = ('PATH=~/venv/bin:$PATH',
+                      'TOIL_SCRIPTS_TEST_NUM_SAMPLES=%i' % self.numSamples,
+                      'TOIL_SCRIPTS_TEST_TOIL_OPTIONS=' + pipes.quote(toilOptions),
+                      'TOIL_SCRIPTS_TEST_JOBSTORE=' + self.jobStore,
+                      'python', '-m', 'unittest', '-v',
+                      'toil_scripts.rnaseq_cgl.test.test_rnaseq_cgl.RNASeqCGLTest'
+                      '.test_manifest'
+                      )
+
+        AWSProvisioner._ssh(master.ip_address, runCommand)
+
+    @integrative
+    @needs_aws
+    def testAutoScale(self):
+        self._test(spotInstances=False)
 
 
 @integrative

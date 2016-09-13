@@ -11,12 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import socket
 import subprocess
 import logging
+
+import time
 from boto.ec2.blockdevicemapping import BlockDeviceMapping, BlockDeviceType
 from boto.exception import BotoServerError, EC2ResponseError
-from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2, wait_spot_requests_active
-from itertools import islice
+from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2, wait_spot_requests_active, a_short_time, \
+    wait_transition
+from itertools import islice, count
 
 from toil.batchSystems.abstractBatchSystem import AbstractScalableBatchSystem
 from toil.provisioners.abstractProvisioner import AbstractProvisioner, Shape
@@ -79,14 +83,58 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
 
     @classmethod
     def sshCluster(cls, securityGroupName):
+        master = cls._getMaster(securityGroupName, wait=True)
+        cls._ssh(master.ip_address, 'bash')
+
+    @classmethod
+    def _ssh(cls, masterIP, command):
+        command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"docker exec -it leader %s\"" % (masterIP, command)
+        subprocess.check_call(command, shell=True)
+
+    @classmethod
+    def _getMaster(cls, securityGroupName, wait=False):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
         instances = cls.__getNodesInCluster(ctx, securityGroupName, both=True)
         key = lambda x: x.launch_time
         instances.sort(key=key)
         master = instances[0]  # assume master was launched first
-        masterIP = master.ip_address
-        command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"docker exec -it leader bash\"" % masterIP
-        subprocess.check_call(command, shell=True)
+        if wait:
+            wait_transition(master, {'pending'}, 'running')
+            cls._waitIP(master)
+            masterIP = master.ip_address
+            cls._waitSSHPort(masterIP)
+
+        return master
+
+    @classmethod
+    def _waitIP(cls, instance):
+        """
+        Wait until the instances has a public IP address assigned to it.
+
+        :type instance: boto.ec2.instance.Instance
+        """
+        while not instance.ip_address or not instance.public_dns_name:
+            time.sleep(a_short_time)
+            instance.update()
+
+    @classmethod
+    def _waitSSHPort(cls, ip_address):
+        """
+        Wait until the instance represented by this box is accessible via SSH.
+
+        :return: the number of unsuccessful attempts to connect to the port before a the first
+        success
+        """
+        for i in count():
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.settimeout(a_short_time)
+                s.connect((ip_address, 22))
+                return i
+            except socket.error:
+                pass
+            finally:
+                s.close()
 
     @classmethod
     def launchCluster(cls, instanceType, keyName, securityGroupName, spotBid=None):

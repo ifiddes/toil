@@ -14,7 +14,7 @@
 import subprocess
 import logging
 from boto.ec2.blockdevicemapping import BlockDeviceMapping, BlockDeviceType
-from boto.exception import BotoServerError
+from boto.exception import BotoServerError, EC2ResponseError
 from cgcloud.lib.ec2 import ec2_instance_types, retry_ec2, wait_spot_requests_active
 from itertools import islice
 
@@ -267,12 +267,18 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
     @classmethod
     def _createSecurityGroup(cls, ctx, name):
         # security group create/get. ssh + all ports open within the group
-        web = ctx.ec2.create_security_group(name, 'Toil appliance security group')
-        # open port 22 for ssh-ing
-        web.authorize(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip='0.0.0.0/0')
-        # the following authorizes all port access within the web security group
-        web.authorize(ip_protocol='tcp', from_port=0, to_port=9000, src_group=web)
-        return name
+        try:
+            web = ctx.ec2.create_security_group(name, 'Toil appliance security group')
+        except EC2ResponseError as e:
+            if e.status == 400 and 'already exists' in e.body:
+                pass  # group exists- nothing to do
+            else:
+                raise
+        else:
+            # open port 22 for ssh-ing
+            web.authorize(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip='0.0.0.0/0')
+            # the following authorizes all port access within the web security group
+            web.authorize(ip_protocol='tcp', from_port=0, to_port=9000, src_group=web)
 
     @classmethod
     def _getProfileARN(cls, ctx, role):

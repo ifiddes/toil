@@ -42,7 +42,7 @@ class AWSProvisionerTest(ToilTest):
 
     def tearDown(self):
         from toil.provisioners.aws.awsProvisioner import AWSProvisioner
-        AWSProvisioner.destroyCluster(self.clusterName)
+        # AWSProvisioner.destroyCluster(self.clusterName)
 
     def _test(self, spotInstances=False):
         from toil.provisioners.aws.awsProvisioner import AWSProvisioner
@@ -52,7 +52,7 @@ class AWSProvisionerTest(ToilTest):
         master = AWSProvisioner._getMaster(securityGroupName=self.clusterName, wait=True)
 
         # install toil scripts
-        install_command = ('pip install toil-scripts=%s' % self.toilScripts)
+        install_command = ('pip install toil-scripts==%s' % self.toilScripts)
         AWSProvisioner._ssh(master.ip_address, command=install_command)
         toilOptions = ['--batchSystem=mesos',
                        '--mesosMaster=mesos-master:5050',

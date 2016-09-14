@@ -27,9 +27,7 @@ iam_full_policy = dict( Version="2012-10-17", Statement=[
     dict( Effect="Allow", Resource="*", Action="iam:*" ) ] )
 
 
-leaderTag = '3.3.0--512d560dbef36e2ce6d9e89e1faa921829579a75'
 leaderArgs = '--registry=in_memory'
-workerTag = '3.3.0--512d560dbef36e2ce6d9e89e1faa921829579a75'
 workerArgs = '--work_dir=/var/lib/mesos --master={}:5050 --attributes=preemptable:False'
 
 AWSUserData = """#cloud-config
@@ -108,6 +106,6 @@ coreos:
 
         [Service]
         Restart=always
-        ExecStart=/usr/bin/docker run --net=host -v /var/lib/mesos:/var/lib/mesos -v /var/lib/docker:/var/lib/docker -v /var/lib/toil:/var/lib/toil --name={role} cket/toil-{role}:{tag} {args}
+        ExecStart=/usr/bin/docker run --net=host -v /var/lib/mesos:/var/lib/mesos -v /var/lib/docker:/var/lib/docker -v /var/lib/toil:/var/lib/toil --name={role} {repo}:{tag} {args}
 
 """

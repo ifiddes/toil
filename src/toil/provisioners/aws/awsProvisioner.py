@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import socket
 import subprocess
 import logging
@@ -24,7 +25,6 @@ from itertools import islice, count
 
 from toil.batchSystems.abstractBatchSystem import AbstractScalableBatchSystem
 from toil.provisioners.abstractProvisioner import AbstractProvisioner, Shape
-from toil.provisioners.cgcloud.provisioner import CGCloudProvisioner
 from toil.provisioners.aws import *
 from cgcloud.lib.context import Context
 from boto.utils import get_instance_metadata
@@ -40,6 +40,13 @@ def expectedLaunchErrors(e):
 
 def expectedShutdownErrors(e):
     return e.status == 400 and 'dependent object' in e.body
+
+
+def groupNotFound(e):
+    return e.status == 400 and 'does not exist in default VPC'
+
+
+dockerInfo = os.environ['TOIL_APPLIANCE_SELF'] if 'TOIL_APPLIANCE_SELF' in os.environ else None
 
 
 class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
@@ -89,7 +96,12 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
     @classmethod
     def _ssh(cls, masterIP, command):
         command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"docker exec -it leader %s\"" % (masterIP, command)
-        subprocess.check_call(command, shell=True)
+        return subprocess.check_output(command, shell=True)
+
+    @classmethod
+    def _sshOuter(cls, masterIP, command):
+        command = "ssh - o \"StrictHostKeyChecking=no\" -t core@%s \"%s\""% (masterIP, command)
+        return subprocess.check_output(command, shell=True)
 
     @classmethod
     def _getMaster(cls, securityGroupName, wait=False):
@@ -103,7 +115,10 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
             cls._waitIP(master)
             masterIP = master.ip_address
             cls._waitSSHPort(masterIP)
-
+            x = ''
+            while 'leader' not in x:
+                time.sleep(2)
+                x = cls._sshOuter(masterIP=masterIP, command='docker ps')
         return master
 
     @classmethod
@@ -141,7 +156,10 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
         profileARN = cls._getProfileARN(ctx, role='leader')
         cls._createSecurityGroup(ctx, securityGroupName)
-        leaderData = {'role': 'leader', 'tag': leaderTag, 'args': leaderArgs}
+        dockerLeaderData = dockerInfo.rsplit(':', 1)
+        leaderRepo = dockerLeaderData[0]
+        leaderTag = dockerLeaderData[1]
+        leaderData = {'role': 'leader', 'tag': leaderTag, 'args': leaderArgs, 'repo':leaderRepo}
         userData = AWSUserData.format(**leaderData)
         if not spotBid:
             for attempt in retry_ec2(retry_while=expectedLaunchErrors):
@@ -204,7 +222,10 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
     def _addNodes(self, instancesToLaunch, preemptable=None):
         bdm = self._getBlockDeviceMapping()
         arn = self._getProfileARN(self.ctx, role='worker')
-        workerData = {'role': 'worker', 'tag': workerTag, 'args': workerArgs.format(self.masterIP)}
+        workerData = dockerInfo.rsplit(':', 1)
+        workerRepo = workerData[0] + '-worker'
+        workerTag = workerData[1]
+        workerData = {'role': 'worker', 'tag': workerTag, 'args': workerArgs.format(self.masterIP), 'repo': workerRepo}
         userData = AWSUserData.format(**workerData)
         if not preemptable:
             logger.debug('Launching non-preemptable instance(s)')

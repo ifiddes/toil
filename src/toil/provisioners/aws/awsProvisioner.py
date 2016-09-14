@@ -91,17 +91,20 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
     @classmethod
     def sshCluster(cls, securityGroupName):
         master = cls._getMaster(securityGroupName, wait=True)
+        logger.info('SSH ready')
         cls._ssh(master.ip_address, 'bash')
 
     @classmethod
     def _ssh(cls, masterIP, command):
         command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"docker exec -it leader %s\"" % (masterIP, command)
-        return subprocess.check_output(command, shell=True)
+        print command
+        return subprocess.check_call(command, shell=True)
 
     @classmethod
     def _sshOuter(cls, masterIP, command):
-        command = "ssh - o \"StrictHostKeyChecking=no\" -t core@%s \"%s\""% (masterIP, command)
-        return subprocess.check_output(command, shell=True)
+        command = "ssh -o \"StrictHostKeyChecking=no\" -t core@%s \"%s\""% (masterIP, command)
+        ouput = subprocess.check_output(command, shell=True)
+        return ouput
 
     @classmethod
     def _getMaster(cls, securityGroupName, wait=False):
@@ -111,14 +114,26 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
         instances.sort(key=key)
         master = instances[0]  # assume master was launched first
         if wait:
+            logger.info('Waiting for master to run...')
             wait_transition(master, {'pending'}, 'running')
+            logger.info('... master is running')
+            logger.info('Waiting for master ip...')
             cls._waitIP(master)
+            logger.info('...got master ip')
             masterIP = master.ip_address
+            logger.info('Waiting for master ssh port to open...')
             cls._waitSSHPort(masterIP)
+            logger.info('...ssh port open')
+            cls._waitDocker(masterIP)
             x = ''
+            logger.info('Waiting for master Toil appliance to start...')
             while 'leader' not in x:
-                time.sleep(2)
                 x = cls._sshOuter(masterIP=masterIP, command='docker ps')
+                if 'leader' not in x:
+                    logger.info('...Still waiting, trying again in 10sec...')
+                    time.sleep(10)
+                else:
+                    logger.info('...Toil appliance started')
         return master
 
     @classmethod
@@ -131,6 +146,18 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
         while not instance.ip_address or not instance.public_dns_name:
             time.sleep(a_short_time)
             instance.update()
+
+    @classmethod
+    def _waitDocker(cls, ip_address):
+        logger.info('waiting for docker to start')
+        command = 'ps aux | grep \\"docker daemon\\"'
+        output = ''
+        while 'root' not in output:
+            output = cls._sshOuter(ip_address, command)
+            print output
+            time.sleep(5)
+        logger.info('done')
+
 
     @classmethod
     def _waitSSHPort(cls, ip_address):
@@ -156,6 +183,7 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
         ctx = Context(availability_zone='us-west-2a', namespace='/')
         profileARN = cls._getProfileARN(ctx, role='leader')
         cls._createSecurityGroup(ctx, securityGroupName)
+        bdm = cls._getBlockDeviceMapping(ec2_instance_types[instanceType])
         dockerLeaderData = dockerInfo.rsplit(':', 1)
         leaderRepo = dockerLeaderData[0]
         leaderTag = dockerLeaderData[1]
@@ -178,7 +206,8 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
                                                               instance_type=instanceType,
                                                               instance_profile_arn=profileARN,
                                                               user_data=userData,
-                                                              launch_group=securityGroupName)
+                                                              launch_group=securityGroupName,
+                                                              block_device_map=bdm)
             assert requests
             wait_spot_requests_active(ctx.ec2, requests)
 
@@ -220,7 +249,7 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
             ctx.iam.delete_instance_profile(profile_name)
 
     def _addNodes(self, instancesToLaunch, preemptable=None):
-        bdm = self._getBlockDeviceMapping()
+        bdm = self._getBlockDeviceMapping(self.instanceType)
         arn = self._getProfileARN(self.ctx, role='worker')
         workerData = dockerInfo.rsplit(':', 1)
         workerRepo = workerData[0] + '-worker'
@@ -253,12 +282,13 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
 
         logger.info('Launched %s new instance(s)', instancesToLaunch)
 
-    def _getBlockDeviceMapping(self):
+    @classmethod
+    def _getBlockDeviceMapping(cls, instanceType):
         # determine number of ephemeral drives via cgcloud-lib
         bdtKeys = ['', '/dev/xvdb', '/dev/xvdc', '/dev/xvdd']
         bdm = BlockDeviceMapping()
         # the first disk is already attached for us so start with 2nd.
-        for disk in xrange(1, self.instanceType.disks + 1):
+        for disk in xrange(1, instanceType.disks + 1):
             bdm[bdtKeys[disk]] = BlockDeviceType(
                 ephemeral_name='ephemeral{}'.format(disk - 1))  # ephemeral counts start at 0
 
@@ -344,10 +374,14 @@ class AWSProvisioner(AbstractProvisioner, BaseAWSProvisioner):
             else:
                 raise
         else:
-            # open port 22 for ssh-ing
-            web.authorize(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip='0.0.0.0/0')
-            # the following authorizes all port access within the web security group
-            web.authorize(ip_protocol='tcp', from_port=0, to_port=9000, src_group=web)
+            for attempt in retry_ec2(retry_while=groupNotFound):
+                with attempt:
+                    # open port 22 for ssh-ing
+                    web.authorize(ip_protocol='tcp', from_port=22, to_port=22, cidr_ip='0.0.0.0/0')
+            for attempt in retry_ec2(retry_while=groupNotFound):
+                with attempt:
+                    # the following authorizes all port access within the web security group
+                    web.authorize(ip_protocol='tcp', from_port=0, to_port=9000, src_group=web)
 
     @classmethod
     def _getProfileARN(cls, ctx, role):

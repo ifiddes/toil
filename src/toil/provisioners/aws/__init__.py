@@ -65,7 +65,6 @@ write_files:
         done
         if (("$ephemeral_count" == "1" )); then
             echo one ephemeral drive to mount
-            sudo mkfs.ext4 -F $drives
             sudo mount $drives /mnt/ephemeral
         fi
         if (("$ephemeral_count" > "1" )); then

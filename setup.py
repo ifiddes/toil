@@ -37,7 +37,7 @@ setup(
         'azure': [
             'azure==1.0.3'],
         'encryption': [
-            'pynacl==0.3.0'],
+            botoRequirement],
         'google': [
             'gcs_oauth2_boto_plugin==1.9',
             botoRequirement],

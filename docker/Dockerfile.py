@@ -9,7 +9,7 @@ options = parser.parse_args()
 
 mesos_role = dict(leader='master', worker='slave')[options.role]
 
-dependencies = ' '.join(['libffi-dev',   # For client side encryption for 'azure' extra with PyNACL
+dependencies = ' '.join([   # For client side encryption for 'azure' extra with PyNACL
                          'python-dev',   # For installing Python packages with native code
                          'python-pip'])  # Bootstrap pip, but needs upgrading, see below
 

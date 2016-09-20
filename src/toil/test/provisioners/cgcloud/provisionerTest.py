@@ -16,6 +16,7 @@ import logging
 import os
 import pipes
 import subprocess
+import textwrap
 from abc import abstractmethod, ABCMeta
 from urlparse import urlparse
 from uuid import uuid4
@@ -23,7 +24,7 @@ from uuid import uuid4
 from bd2k.util.iterables import concat
 from cgcloud.lib.test import CgcloudTestCase
 
-from toil.test import integrative, ToilTest
+from toil.test import integrative, ToilTest, timeLimit
 from toil.version import version as toil_version, cgcloudVersion
 
 log = logging.getLogger(__name__)
@@ -265,3 +266,41 @@ class CGCloudRNASeqTest(AbstractCGCloudProvisionerTest):
     @integrative
     def testAutoScaledSpotCluster(self):
         self._test(autoScaled=True, spotInstances=True)
+
+restartScript = textwrap.dedent("""\"
+                                    from toil.job import Job
+                                    import argparse
+                                    import os
+
+                                    def f0(job):
+                                        if 'FAIL' in os.environ:
+                                            raise RuntimeError('failed on purpose')
+
+                                    if __name__ == '__main__':
+                                        parser = argparse.ArgumentParser()
+                                        Job.Runner.addToilOptions(parser)
+                                        options = parser.parse_args()
+                                        i = Job.Runner.startToil(Job.wrapJobFn(f0), options)
+                                    \"""")
+
+
+class CGCloudRestartTest(AbstractCGCloudProvisionerTest):
+    scriptName = 'restartTest.py'
+
+    def _getScript(self):
+        self._leader('echo %s > %s' % (restartScript, self.scriptName), shell=True)
+
+    def _runScript(self, toilOptions):
+        # clean = onSuccess
+        y = lambda x : ('clean' not in x and 'retryCount' not in x)
+        newOptions = (option for option in toilOptions if y(option))
+        # try finally around this stuff so we can clean jobStore if something happens
+        # this command should fail, right? if toil fails it != 0
+        try:
+            self._leader('python', self.scriptName, self.jobStore, '-e', 'FAIL=true', *newOptions)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            self.fail('Command succeeded when we expected failure')
+        with timeLimit(300):
+            self._leader('python', self.scriptName, self.jobStore, '--restart', *newOptions)

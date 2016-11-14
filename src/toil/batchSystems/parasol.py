@@ -40,7 +40,7 @@ class ParasolBatchSystem(BatchSystemSupport):
 
     @classmethod
     def supportsWorkerCleanup(cls):
-        return False
+        return True
 
     @classmethod
     def supportsHotDeployment(cls):
@@ -59,7 +59,8 @@ class ParasolBatchSystem(BatchSystemSupport):
                 raise RuntimeError("Can't find %s on PATH." % command)
         logger.info('Using Parasol at %s', command)
         self.parasolCommand = command
-        self.parasolResultsDir = tempfile.mkdtemp(dir=config.jobStore)
+        self.parasolResultsDir = tempfile.mkdtemp(dir=os.path.abspath(config.jobStore[5:]))
+        logger.debug("Using parasol results dir: %s", self.parasolResultsDir)
 
         # In Parasol, each results file corresponds to a separate batch, and all jobs in a batch
         # have the same cpu and memory requirements. The keys to this dictionary are the (cpu,
@@ -216,15 +217,11 @@ class ParasolBatchSystem(BatchSystemSupport):
         Get all queued and running jobs for a results file.
         """
         jobIDs = []
-        for line in self._runParasol(['-results=' + resultsFile, 'pstat2'])[1]:
-            runningJobMatch = self.runningPattern.match(line)
-            queuedJobMatch = self.queuePattern.match(line)
-            if runningJobMatch:
-                jobID = runningJobMatch.group(1)
-            elif queuedJobMatch:
-                jobID = queuedJobMatch.group(1)
-            else:
+        for line in self._runParasol(['-extended', 'list', 'jobs'])[1]:
+            fields = line.strip().split()
+            if len(fields) == 0 or fields[-1] != resultsFile:
                 continue
+            jobID = fields[0]
             jobIDs.append(int(jobID))
         return set(jobIDs)
 
@@ -249,6 +246,7 @@ class ParasolBatchSystem(BatchSystemSupport):
         runningJobs = {}
         issuedJobs = self.getIssuedBatchJobIDs()
         for line in self._runParasol(['pstat2'])[1]:
+            logger.debug(line)
             if line != '':
                 match = self.runningPattern.match(line)
                 if match is not None:
@@ -365,6 +363,7 @@ class ParasolBatchSystem(BatchSystemSupport):
         logger.debug('Joining worker thread...')
         self.worker.join()
         logger.debug('... joined worker thread.')
-        for results in self.resultsFiles.values():
-            os.remove(results)
-        os.rmdir(self.parasolResultsDir)
+        # for results in self.resultsFiles.values():
+        #     os.remove(results)
+        # os.rmdir(self.parasolResultsDir)
+
